@@ -1,0 +1,491 @@
+---
+title: "2016 IL Financial Contributions to Presidential Campaigns version 2"
+author: "Sunny Jiang"
+date: "November 10, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE)
+```
+
+***
+
+## Data sources
+
+This report explores a dataset of 2016 Illinois Financial Contributions to 
+Presidential Campaigns, which including 250K records. 
+For details please refer to this website: 
+<http://classic.fec.gov/disclosurep/pnational.do>
+
+
+```{r set working directory, bring in library. And clean up the data set}
+setwd("C:/Users/jiangz4/Desktop/Udacity/Data Analyst/R Project")
+
+library(ggplot2) #must load the ggplot package first
+library(dplyr)
+library(knitr)
+library(treemap)
+library(ggmap)
+library(gridExtra)
+
+data(zipcode)
+
+# bring in the data set
+il <- read.csv("IL_2016.csv", header = TRUE, fill = TRUE, sep = ",", 
+               row.names = NULL)
+colnames(il) <- c(colnames(il)[-1],"x")
+il$x <- NULL
+
+zipcode <- read.csv("zip_codes_states.csv", header = TRUE, fill = TRUE, sep = ",", 
+               row.names = NULL)
+
+# clean up the data to combine the multiple entries
+il_clean <- il%>%
+    group_by(cmte_id,cand_id,cand_nm,contbr_nm,contbr_city,contbr_st,
+             contbr_zip,contbr_employer,contbr_occupation,contb_receipt_dt)%>%
+    summarize(amount=sum(contb_receipt_amt))
+
+# add clean columns (last name only, change date to right column type
+# aggregate date to month-year, 5 digits zip code) and sort by amount
+il_clean$cand_ln <- gsub(",.*$", "", il_clean$cand_nm) 
+il_clean$contb_receipt_dt <- as.Date(il_clean$contb_receipt_dt, 
+                                     format = "%d-%b-%y")
+il_clean$contb_receipt_m_y <- as.Date(cut(il_clean$contb_receipt_dt,
+                         breaks = "month"))
+il_clean$zip <- substr(as.character(il_clean$contbr_zip),1,5)
+
+il_clean <- il_clean[order(-il_clean$amount),]
+```
+
+```{r}
+# group by candidate name, contirbution date and amount
+il_groupby_cand_mth <- il_clean%>% 
+    group_by(cand_nm,cand_ln,contb_receipt_m_y)%>%
+    summarize(amount=sum(amount),count=n())
+```
+
+```{r}
+# group by contributor, contirbution date and amount
+il_groupby_contb <- il_clean%>%
+    group_by(cmte_id,cand_id,cand_nm,contbr_nm,contbr_city,contbr_st,
+             contb_receipt_m_y,zip,cand_ln)%>%
+    summarize(amount=sum(amount))
+```
+
+```{r}
+# summary table for contributor
+il_groupby_contb_sum <- il_groupby_contb%>%
+                        group_by(contbr_nm, zip)%>%
+                        summarise(amount=sum(amount),times_of_contbr=n(),
+                                  number_of_candi=length(unique(cand_id)))
+il_groupby_contb_sum <- 
+    il_groupby_contb_sum[order(-il_groupby_contb_sum$amount),]
+```
+
+```{r}
+# summary table for contributor
+il_groupby_contb_heat <- il_groupby_contb_sum%>%
+    group_by(times_of_contbr, number_of_candi)%>%
+    summarise(amount=sum(amount),count=n())
+```
+
+```{r}
+# merge zipcode data to bring in lat and lon
+il_groupby_contb_zip <- 
+    merge(il_clean,zipcode,by,by.x='zip', by.y='zip_code')
+```
+
+```{r}
+# summary table for treemap. group by county, city and zip
+il_groupby_county_cand <- il_groupby_contb_zip%>%
+    group_by(cand_ln, state, county, city, zip, latitude, longitude)%>%
+    summarise(amount=sum(amount),count=n())
+```
+
+
+```{r}
+# find the top contirbution counties
+il_sum_county <- subset(il_groupby_county_cand, state == "IL") %>% 
+    group_by(county) %>% summarise(amount = sum(amount), count = n())
+il_sum_county <- il_sum_county[order(-il_sum_county$amount),]
+```
+
+***
+
+## Data Explore and Analysis
+
+### Univariate
+
+Heatmap and box plot for contribution amount to decipt outliers
+```{r}
+# Heatmap and box plot for contribution amount to decipt outliers
+grid.arrange( ggplot(aes(x=amount), 
+                     data = il_clean) +
+                  geom_histogram( bins = 30)+scale_x_log10() ,
+              ggplot(aes(x=1, y=amount), 
+                     data = il_clean) +
+                  geom_boxplot( ) +scale_y_log10() , nrow =1)
+```
+
+To elimate the noise, we can plot only the ones within 1% to 99% percentile. 
+We can see most contribution amounts are within $0 to $1000 range, 
+after zoom in we can see most amount are actully less than $250.
+
+```{r}
+# contirbution amount by contributor histogram with quantile (0.01 to 0.99)
+ggplot(data=il_groupby_contb, aes(amount)) + 
+    geom_histogram(binwidth = 20) +
+    xlim(quantile(il_groupby_contb$amount,0.01),
+         quantile(il_groupby_contb$amount,0.99))
+    
+# contirbution amount by contributor histogram with 0 to 1000
+ggplot(data=il_groupby_contb, aes(amount)) + 
+    geom_histogram(binwidth = 20) +    
+    xlim(0,1000)
+```
+
+
+From the the first boxplot we can see, this dataset has a few data points that
+incorrectly mapped to Illinois. And when plot the count by county for IL. Cook
+county contirbutes most of the contributions.
+
+```{r}
+# plot contribution amount by state
+ggplot(aes(x=state,y=amount), data = il_groupby_contb_zip) + 
+    geom_boxplot()
+
+# plot contribution amount by county for IL
+ggplot(aes(x=county), data = subset(il_groupby_contb_zip,state=="IL")) +
+    geom_histogram(stat="count") +
+    coord_flip()
+```
+
+
+From two bar charts we can see most people only contributed less than 3 times.
+And only supported 1 candidate.
+
+```{r}
+
+# number of contirbutions made by each contributor histogram 
+ggplot(data = il_groupby_contb_sum, aes(times_of_contbr)) + 
+    geom_histogram(binwidth = 1)
+
+# number of candidate supported by each contributor histogram 
+ggplot(data = il_groupby_contb_sum, aes(number_of_candi)) + 
+    geom_histogram(binwidth = 1)
+
+```
+
+***
+
+### Bivariate
+
+Take a closer look through the heatmap: 55% of people only 
+contributed once to one candidate and covers 41% of total contribution 
+amount in IL.
+
+
+```{r}
+
+# number of contirbutions and candidate supported heatmap
+ggplot(data = il_groupby_contb_heat, 
+       aes(x = number_of_candi, y = times_of_contbr)) +
+    geom_tile(aes(fill = log(count)),colour = "white") +
+    geom_text(aes(label = count)) +
+    scale_fill_gradient(low = "white", high = "steelblue") +
+    scale_y_continuous(breaks = c(1:20,1))
+```
+
+Contribution amount distribution for each candidate. Cruz has the highest
+contribution amount.
+
+```{r}
+# contribution amount distribution for each candidate
+ggplot(data=il_clean,
+        aes(y=amount, x=cand_ln )) +
+   geom_boxplot(  ) +
+      theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+From these two bar charts, we can see **Clinton**, **Sanders**, **Cruz** and 
+**Trump** are the top 4 condidates by both contribution count and amount
+
+```{r pressure, echo=FALSE}
+# plot by candidate name and contribution count
+il_groupby_cand_plot1 <- ggplot(data=il_groupby_cand_mth, 
+                                aes(x=reorder(cand_nm, count), y=count)) + 
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    xlab("Candidate Name") + ylab("Contribution Count")
+
+# plot by candidate name and contribution amount
+il_groupby_cand_plot2 <- ggplot(data=il_groupby_cand_mth, 
+                                aes(x=reorder(cand_nm, amount), y=amount)) + 
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    xlab("Candidate Name") + ylab("Contribution Amount")
+
+grid.arrange(il_groupby_cand_plot1, il_groupby_cand_plot2, ncol=2)
+```
+
+Contribution amount distribution for each county, this chart is too busy to see
+anything. So I tried treemap.
+
+```{r}
+# contribution amount distribution for each county
+ggplot(data=il_groupby_contb_zip,
+        aes(y=amount, x=county )) +
+   geom_boxplot(  ) +
+      theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+From these two treemap charts, we can see Cook County has the highest
+contribution amount. When I broke down to City and zipcode level for Cook 
+County, Chicago is the top 1. Size corresponds to Amount and Color corresponds
+to Count.
+
+```{r , echo=FALSE}
+# plot by county and contribution amount
+treemap(subset(il_groupby_county_cand,amount > 0),
+        index = c("county"),
+        vSize = "amount",
+        vColor = "count",
+        type = "value",
+        format.legend = list(scientific = TRUE, big.mark = " "))
+
+
+treemap(subset(il_groupby_county_cand,county == "Cook"),
+        index = c("city","zip"),
+        vSize = "amount",
+        vColor = "count",
+        type = "value",
+        format.legend = list(scientific = TRUE, big.mark = " "))
+```
+
+
+***
+
+### Multivariate
+
+For our top 4 candidates:
+
+**Bernie Sanders** announced that he plan to seek the Democratic Party's 
+nomination for President of the United States on May 26, 2015. On June 14, 2016, 
+following the final primary election, Clinton became the presumptive Democratic 
+nominee. As we can see from the time series chart, contribution made for Sanders
+were between May 2015 to July 2016, peaked on March 2016. Matches his campaign 
+timeline.
+
+**Hillary Clinton** announced her presidential campaign on April 12, 2015. 
+Nominated as the presumptive nominee of the Demoratic Party on July 26, 2016. 
+Conceded the election to Republican Donald Trump on November 9. 
+The contribution amount to her was the highest all the time, expect for 
+exceeded by Sanders on March and April 2016.
+
+**Ted Cruz** announced his presidential campaign on March 23, 2015. 
+And suspended his campaign late April 2016. The contribution amount to him were 
+higher than to Trump until he suspended his campaign.
+
+**Donald Trump** formally launched his campaign on June 16, 2015. 
+On May 3, 2016 Trump became the presumptive nominee of the Republican Party, 
+and elected as president on November 8, 2016. From the chart we can see, 
+contribution to him was really low at the beginning and started to take off 
+on May 2016 after he became the presumptive nominee of Republican Party.
+
+
+```{r}
+# plot by candidate name and contribution amount over time
+ggplot(data=subset(il_groupby_cand_mth, cand_ln %in% 
+                       c("Trump", "Sanders", "Clinton", "Cruz")), 
+       aes(x=contb_receipt_m_y, y=amount, color=cand_ln)) + 
+    geom_line() +
+    scale_x_date() + xlab("") + ylab("Total Contribution Amount")
+```
+
+
+Then study the distirbution for top 4 candidates with boxplot. 
+Sanders has the lowest median contribution amount around $60. We can see some 
+darker lines at $10, $30 and $100 which means a lot of contribution at 
+those amounts. While Clinton has the hightest median contribution amount around 
+$100, and have a lot of contributed at $50, $100, $500 and $2500. 
+The highest contribution amount is $27000, and contributed to Cruz.
+
+```{r}
+# contirbution amount by contributor boxplot with log
+ggplot(data=subset(il_groupby_contb, cand_ln %in% 
+                       c("Trump", "Sanders", "Clinton","Cruz")), 
+       aes(x=cand_ln, y=amount)) + 
+    geom_jitter(alpha=1/50) +
+    geom_boxplot() +
+    scale_y_log10(breaks = c(1,5,10,20,50,70,100,200,300,
+                             500,1000,2000,3000,5000,10000,20000))
+```
+
+The first treemap shows that for Cook County, most of the contribtuion went to
+Clinton, then Sanders. From the second one, we can see Clinton had most of all 
+the contribtutions. Trump and Sanders had similar amount.
+
+```{r}
+treemap(subset(il_groupby_county_cand,amount>0 & cand_ln %in% 
+                       c("Trump", "Sanders", "Clinton", "Cruz")),
+        index = c("county","cand_ln"),
+        vSize = "amount",
+        vColor = "amount",
+        type = "value",
+        format.legend = list(scientific = TRUE, big.mark = " "))
+        
+treemap(subset(il_groupby_county_cand,amount>0 & cand_ln %in% 
+                       c("Trump", "Sanders", "Clinton", "Cruz")),
+        index = c("cand_ln","county"),
+        vSize = "amount",
+        vColor = "amount",
+        type = "value",
+        format.legend = list(scientific = TRUE, big.mark = " "))
+
+```
+
+I picked the top 10 counties with the highest contribution amount. And used 
+boxplot and barchart to see the distiribtution for top 4 candidates.
+Contritubiton to Clinton from Cook county really dominated it. But in some
+counties like Peoria, the contirbution to Trump was higher.
+
+```{r}
+head(il_sum_county,10)
+ggplot(data=subset(il_groupby_county_cand,amount>0 & county %in% 
+                       c("Cook", "Lake", "Du Page", "Kane", "Will", "Champaign",
+                       "Mchenry", "Madison", "Peoria", "Winnebago") & 
+                       cand_ln %in% c("Trump", "Sanders", "Clinton", "Cruz")),
+        aes(y=amount, x=county  , fill = cand_ln)) +
+   geom_boxplot(  ) +
+   scale_y_log10() +
+   coord_flip()
+   
+ggplot(data=subset(il_groupby_county_cand,amount>0 & county %in% 
+                       c("Cook", "Lake", "Du Page", "Kane", "Will", "Champaign",
+                       "Mchenry", "Madison", "Peoria", "Winnebago") & 
+                       cand_ln %in% c("Trump", "Sanders", "Clinton", "Cruz")),
+        aes(y=amount, x=county  , fill = cand_ln)) +
+   geom_bar(stat="identity",position="dodge") +
+   scale_fill_discrete(name="cand_ln") +
+   coord_flip()
+```
+
+
+
+Plot the contribution amount by zipcode. Can't really find a lot information 
+except we can identify the big cities like Chicago, Peoria, Springfield...
+
+```{r}
+il_groupby_contb_zip %>% group_by(state) %>% summarize(n())
+# plot by zipcode
+ggplot(data = subset(il_groupby_contb_zip, state == "IL"), 
+       aes(x = longitude, y = latitude, color = log(amount))) +
+    geom_point() 
+```
+
+***
+
+## Final Plots and Summary
+
+### Plot One
+
+For 2016 Presidency Campaign, Sanders, Clinton, Cruz and Trump were the top 4 
+candidates by contribution amount and count. This shows the contirubtion amount 
+for these 4 leading candidates overtime. Clint has the highest amount all the 
+time except for exceeded by Sanders on March and April 2016. This might be able
+to indicate her winning of Illinois electoral votes.
+
+**Bernie Sanders** announced that he plan to seek the Democratic Party's 
+nomination for President of the United States on May 26, 2015. On June 14, 2016, 
+following the final primary election, Clinton became the presumptive Democratic 
+nominee. As we can see from the time series chart, contribution made for Sanders
+were between May 2015 to July 2016, peaked on March 2016. Matches his campaign 
+timeline.
+
+**Hillary Clinton** announced her presidential campaign on April 12, 2015. 
+Nominated as the presumptive nominee of the Demoratic Party on July 26, 2016. 
+Conceded the election to Republican Donald Trump on November 9. 
+The contribution amount to her was the highest all the time, expect for 
+exceeded by Sanders on March and April 2016.
+
+**Ted Cruz** announced his presidential campaign on March 23, 2015. 
+And suspended his campaign late April 2016. The contribution amount to him were 
+higher than to Trump until he suspended his campaign.
+
+**Donald Trump** formally launched his campaign on June 16, 2015. 
+On May 3, 2016 Trump became the presumptive nominee of the Republican Party, 
+and elected as president on November 8, 2016. From the chart we can see, 
+contribution to him was really low at the beginning and started to take off 
+on May 2016 after he became the presumptive nominee of Republican Party.
+
+
+```{r}
+# plot by candidate name and contribution amount over time
+ggplot(data=subset(il_groupby_cand_mth, cand_ln %in% 
+                       c("Trump", "Sanders", "Clinton", "Cruz")), 
+       aes(x=contb_receipt_m_y, y=amount, color=cand_ln)) + 
+    geom_line() +
+    scale_x_date() + xlab("") + ylab("Total Contribution Amount [USD]") +
+    labs(title = "Total Contribution Amount for Leading Candidates Overtime") +
+    scale_color_discrete(name="Candidate Last Name")
+```
+
+### Plot Two
+
+Then study the distirbution for top 4 candidates with boxplot. 
+Sanders has the lowest median contribution amount around $60. We can see some 
+darker lines at $10, $30 and $100 which means a lot of contribution at 
+those amounts. While Clinton has the hightest median contribution amount around 
+$100, and have a lot of contributed at $50, $100, $500 and $2500. 
+The highest contribution amount is $27000, and contributed to Cruz.
+
+```{r}
+# contirbution amount by contributor boxplot with log
+ggplot(data=subset(il_groupby_contb, cand_ln %in% 
+                       c("Trump", "Sanders", "Clinton","Cruz")), 
+       aes(x=cand_ln, y=amount)) + 
+    geom_jitter(alpha=1/50) +
+    geom_boxplot() +
+    scale_y_log10(breaks = c(1,5,10,20,50,70,100,200,300,
+                             500,1000,2000,3000,5000,10000,20000)) +
+    xlab("Candidate") + ylab("Contribution Amount [USD]") +
+    labs(title = "Contribution Amount distribution by Leading Candidates")
+```
+
+### Plot Three
+
+55% of people only contributed once to one candidate and covers 41% of total 
+contribution amount in IL. This tells us for most people making contirbution was
+a one time only thing through a campaign event. Less amount of people 
+made contirbution repetitively or supported multiple candidates over time
+
+```{r}
+# number of contirbutions and candidate supported heatmap
+ggplot(data = il_groupby_contb_heat, 
+       aes(x = number_of_candi, y = times_of_contbr)) +
+    geom_tile(aes(fill = log(count)),colour = "white", show.legend = TRUE) +
+    geom_text(aes(label = count), show.legend = TRUE) +
+    scale_fill_gradient(name = "Contirbution Counts",low = "lightblue", 
+                        high = "steelblue") +
+    scale_y_continuous(breaks = c(1:20,1)) +
+    xlab("Number of Candidate Supported") + 
+    ylab("Number of Times that made Contribution") +
+    labs(title = "Contribution Frequency and Candidates Supported") +
+    theme_classic()
+```
+
+***
+
+## Reflection
+* Since I'm living in Peoira Illinois, I choosed Illinois data for this study.
+* I know Clint won the Illinois electoral votes, so I assumed she got most of 
+the contribution. Which turns out true.
+* When I tried to map the location by zip code, I noticed that there are a few 
+records that actually outside Illinois. For future exploration I should 
+eliminate those records up front.
+* Another idea is group the zip code by county and compare with the final 
+results. So we can see in detail whether the contribution amount affects the 
+final results.
+
+
